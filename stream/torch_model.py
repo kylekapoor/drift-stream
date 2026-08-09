@@ -25,8 +25,6 @@ import torch.nn as nn
 from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
-from .events import FEATURES
-
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTED_PATH = ROOT / "data" / "fraud_mlp.ts"
 
@@ -154,7 +152,3 @@ def score_one(scripted, vector) -> float:
         return float(torch.sigmoid(scripted(x))[0])
 
 
-def score_batch(scripted, vectors) -> np.ndarray:
-    with torch.no_grad():
-        x = torch.tensor(np.asarray(vectors, dtype=np.float32))
-        return torch.sigmoid(scripted(x)).numpy()

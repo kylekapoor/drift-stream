@@ -26,7 +26,7 @@ import numpy as np
 from confluent_kafka import Consumer, KafkaException, Producer
 
 from . import drift, model as model_mod
-from .events import FEATURES, Event, Generator, to_arrays
+from .events import FEATURES, Event, Generator
 
 BOOTSTRAP = "localhost:9092"
 TOPIC = "transactions"
