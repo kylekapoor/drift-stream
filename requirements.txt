@@ -7,4 +7,5 @@ pyarrow==25.0.0
 requests==2.34.2
 scikit-learn==1.9.0
 scipy==1.18.0
+torch==2.13.0
 uvicorn==0.52.1

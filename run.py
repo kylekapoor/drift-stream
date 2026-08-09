@@ -34,11 +34,22 @@ def cmd_train(args):
     X, y = _reference(seed=args.seed)
     print(f"{len(X):,} baseline events, {y.sum():,} fraudulent ({y.mean():.2%})")
     model, result, run_id = model_mod.train(X, y, tag="initial")
-    print(f"\naverage precision {result.average_precision:.4f}   "
+    print(f"\nsklearn HistGradientBoosting")
+    print(f"  average precision {result.average_precision:.4f}   "
           f"ROC-AUC {result.roc_auc:.4f}")
-    print(f"precision {result.precision_at_threshold:.3f}  "
+    print(f"  precision {result.precision_at_threshold:.3f}  "
           f"recall {result.recall_at_threshold:.3f}  @ threshold {result.threshold}")
-    print(f"registered as {model_mod.MODEL_NAME} v{model_mod.latest_version()}  (run {run_id})")
+    print(f"  registered as {model_mod.MODEL_NAME} v{model_mod.latest_version()}  "
+          f"(run {run_id})")
+
+    if not args.no_torch:
+        from stream import torch_model
+        net, torch_result = torch_model.train(X, y, epochs=args.epochs)
+        path = torch_model.export(net)
+        print(f"\nPyTorch MLP  (device {torch_result.device}, {torch_result.epochs} epochs)")
+        print(f"  average precision {torch_result.average_precision:.4f}   "
+              f"ROC-AUC {torch_result.roc_auc:.4f}")
+        print(f"  TorchScript exported -> {path.name}")
 
 
 def cmd_demo(args):
@@ -144,21 +155,37 @@ def cmd_drift(args):
 
 
 def cmd_bench(args):
-    """Inline scoring versus the same model behind HTTP."""
+    """Three serving paths, same model family, measured rather than argued about."""
     import time
     import requests
 
     model, _ = model_mod.load()
     events = Generator(seed=7).batch(args.n)
+    vectors = [e.vector() for e in events]
 
-    inline = []
-    for e in events:
-        t0 = time.perf_counter_ns()
-        model_mod.score_one(model, e.vector())
-        inline.append((time.perf_counter_ns() - t0) / 1000.0)
+    def measure(fn, items):
+        out = []
+        for item in items:
+            t0 = time.perf_counter_ns()
+            fn(item)
+            out.append((time.perf_counter_ns() - t0) / 1000.0)
+        return out
 
-    print(f"inline  p50 {np.percentile(inline, 50):7.1f} us  "
-          f"p99 {np.percentile(inline, 99):7.1f} us")
+    inline = measure(lambda v: model_mod.score_one(model, v), vectors)
+    print(f"sklearn inline   p50 {np.percentile(inline, 50):8.1f} us  "
+          f"p99 {np.percentile(inline, 99):8.1f} us")
+
+    try:
+        from stream import torch_model
+        scripted = torch_model.load_scripted()
+    except Exception as exc:
+        print(f"torchscript      (unavailable: {type(exc).__name__})")
+    else:
+        ts = measure(lambda v: torch_model.score_one(scripted, v), vectors)
+        print(f"torchscript      p50 {np.percentile(ts, 50):8.1f} us  "
+              f"p99 {np.percentile(ts, 99):8.1f} us   "
+              f"({np.percentile(inline, 50) / np.percentile(ts, 50):.0f}x faster "
+              f"than sklearn)")
 
     try:
         requests.get(f"{args.url}/health", timeout=2)
@@ -186,6 +213,8 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     t = sub.add_parser("train", help="train on baseline data and register")
+    t.add_argument("--epochs", type=int, default=40)
+    t.add_argument("--no-torch", action="store_true", help="skip the PyTorch model")
     t.set_defaults(func=cmd_train)
 
     d = sub.add_parser("demo", help="publish, score inline, detect drift, retrain")
