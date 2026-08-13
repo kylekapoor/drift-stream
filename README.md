@@ -1,5 +1,7 @@
 # drift-stream
 
+[![tests](https://github.com/kylekapoor/drift-stream/actions/workflows/tests.yml/badge.svg)](https://github.com/kylekapoor/drift-stream/actions/workflows/tests.yml)
+
 You deploy a model that flags fraudulent card transactions. Six months later, is
 it still working? Nobody tells you when a model goes stale — it just quietly
 starts being wrong.
