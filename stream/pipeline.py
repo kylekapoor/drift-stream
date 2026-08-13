@@ -18,6 +18,7 @@ model they started with, which for a monitoring pipeline is entirely fine.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -28,8 +29,10 @@ from confluent_kafka import Consumer, KafkaException, Producer
 from . import drift, model as model_mod
 from .events import FEATURES, Event, Generator
 
-BOOTSTRAP = "localhost:9092"
-TOPIC = "transactions"
+# Overridable so the same code runs against a broker on localhost or one in
+# a sibling container, where the hostname is the compose service name.
+BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
+TOPIC = os.getenv("KAFKA_TOPIC", "transactions")
 
 
 def producer(bootstrap: str = BOOTSTRAP) -> Producer:

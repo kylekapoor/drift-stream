@@ -9,7 +9,7 @@ the world changing underneath the model, and retrains and swaps itself when it
 does. It also demonstrates one failure mode that **no amount of monitoring can
 catch**.
 
-`Python` · `PyTorch` · `Apache Kafka` · `MLflow` · `scikit-learn` · `FastAPI` · `NumPy` · `SciPy`
+`Python` · `PyTorch` · `Apache Kafka` · `Docker` · `MLflow` · `scikit-learn` · `FastAPI` · `NumPy` · `SciPy`
 
 ---
 
@@ -92,7 +92,29 @@ All four produced believable output while being wrong.
 
 ## Usage
 
-No Docker. Kafka 4.x runs in KRaft mode with no ZooKeeper, scoped to this repo.
+### Docker (one command)
+
+```bash
+docker compose run --rm pipeline python run.py train
+docker compose run --rm pipeline python run.py demo --regime covariate_shift
+docker compose --profile api up          # scoring API on :8000
+```
+
+Brings up Kafka 4.x in KRaft mode and the pipeline together. No JDK, no manual
+`kafka-storage format`, no broker left running on the host.
+
+Two details that are easy to get wrong and are handled here: the broker
+advertises **two listeners** (`kafka:9092` for containers, `localhost:29092` for
+the host, because advertising one silently breaks the other side), and MLflow's
+**artifact root is pinned inside the mounted volume** — it otherwise defaults to
+`./mlruns`, which is not mounted, so the database persists while the model files
+vanish and loading fails with `No such artifact` against a row that looks fine.
+The container keeps its own store from the host's, since MLflow records artifact
+locations as absolute paths.
+
+### Without Docker
+
+Kafka 4.x runs in KRaft mode with no ZooKeeper, scoped to this repo.
 
 ```bash
 brew install kafka

@@ -1,0 +1,78 @@
+# Whole pipeline in one command:
+#
+#     docker compose run --rm pipeline python run.py train
+#     docker compose run --rm pipeline python run.py demo --regime concept_drift
+#
+# Replaces the six-step manual Kafka setup: no JDK, no kafka-storage format, no
+# broker left running on the host afterwards.
+
+services:
+  kafka:
+    image: apache/kafka:4.1.0
+    container_name: drift-kafka
+    environment:
+      # Single-node KRaft: this process is both broker and controller, so there
+      # is no ZooKeeper. Kafka 4.x removed it entirely.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+      # Two advertised listeners on purpose. Containers reach the broker as
+      # "kafka:9092"; anything on the host reaches the same broker as
+      # "localhost:29092". Advertising only one breaks whichever side is not it.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Single node: nothing to replicate to.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # One partition, deliberately. Kafka orders within a partition and makes
+      # no promise across them, so more partitions interleave the pre- and
+      # post-drift publishes and every analysis window becomes a blend.
+      KAFKA_NUM_PARTITIONS: 1
+    ports:
+      - "29092:29092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 15s
+
+  pipeline:
+    build: .
+    image: drift-stream:local
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      # A separate store from the host's. MLflow records artifact locations as
+      # absolute paths, so a registry written at /app/data/... cannot be read
+      # from the host and vice versa. Two files, no collision, both persisted.
+      MLFLOW_TRACKING_URI: sqlite:////app/data/mlflow-docker.db
+      MLFLOW_ARTIFACT_ROOT: /app/data/mlartifacts-docker
+    volumes:
+      # One directory, not individual files. Bind-mounting a file that does not
+      # exist yet makes Docker create a directory in its place, which breaks
+      # SQLite on a fresh clone. MLflow's store lives in data/ for that reason.
+      - ./data:/app/data
+    working_dir: /app
+
+  api:
+    image: drift-stream:local
+    depends_on:
+      - pipeline
+    environment:
+      MLFLOW_TRACKING_URI: sqlite:////app/data/mlflow-docker.db
+      MLFLOW_ARTIFACT_ROOT: /app/data/mlartifacts-docker
+    command: uvicorn stream.api:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    profiles: ["api"]   # only starts with: docker compose --profile api up

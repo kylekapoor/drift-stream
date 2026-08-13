@@ -13,6 +13,7 @@ precision-recall curve, which is the curve an actual fraud team operates on.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,13 +31,28 @@ ROOT = Path(__file__).resolve().parent.parent
 # maintenance mode and refuses it outright, and the model registry -- versions,
 # promotion, `models:/name/version` loading -- needs a real database anyway.
 # Still a single local file, still no server, still free.
-TRACKING_URI = f"sqlite:///{ROOT / 'mlflow.db'}"
+# Path is overridable, and the default lives under data/ so a container can
+# mount one directory instead of bind-mounting a single file. Docker creates a
+# *directory* when you bind-mount a file that does not exist yet, which breaks
+# SQLite in a way that only shows up on a fresh clone.
+TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", f"sqlite:///{ROOT / 'data' / 'mlflow.db'}")
 EXPERIMENT = "drift-stream"
 MODEL_NAME = "fraud-scorer"
+
+# Where the model files themselves go, as opposed to the metadata database.
+# MLflow otherwise picks ./mlruns relative to the working directory, which in a
+# container is not the mounted volume -- so the database persists, the artifacts
+# do not, and loading a registered model fails with "No such artifact" against a
+# row that looks perfectly valid. Pinning it under data/ keeps the store and its
+# artifacts in the single directory the container mounts.
+ARTIFACT_ROOT = Path(os.getenv("MLFLOW_ARTIFACT_ROOT", ROOT / "data" / "mlartifacts"))
 
 
 def _mlflow_ready():
     mlflow.set_tracking_uri(TRACKING_URI)
+    if mlflow.get_experiment_by_name(EXPERIMENT) is None:
+        ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
+        mlflow.create_experiment(EXPERIMENT, artifact_location=ARTIFACT_ROOT.as_uri())
     mlflow.set_experiment(EXPERIMENT)
 
 
