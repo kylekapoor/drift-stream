@@ -226,6 +226,59 @@ def test_percentiles_are_ordered():
     assert p["p50"] < p["p95"] < p["p99"] <= p["max"]
 
 
+# --- postgres sink ----------------------------------------------------------
+
+def test_sink_is_a_no_op_without_a_database():
+    """The pipeline must run identically with or without Postgres."""
+    from stream import sink as sink_mod
+
+    s = sink_mod.Sink(run_id="test", dsn=None).connect()
+    assert not s.enabled
+    s.record(1, 0.5, 0, 1, 100.0)          # must not raise
+    s.record_drift({"at_event": 1, "verdict": "stable"})
+    assert s.flush() == 0 and s.written == 0
+    assert s.report() == []
+    s.close()
+
+
+def test_sink_batches_instead_of_writing_per_event():
+    """One insert per event would put a round trip inside the scoring loop."""
+    from stream import sink as sink_mod
+
+    calls = []
+
+    class FakeCursor:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, *a): pass
+        def executemany(self, sql, rows): calls.append(len(rows))
+
+    class FakeConn:
+        def cursor(self): return FakeCursor()
+        def close(self): pass
+
+    s = sink_mod.Sink(run_id="test", dsn="x")
+    s._conn = FakeConn()
+
+    for i in range(sink_mod.BATCH_SIZE - 1):
+        s.record(i, 0.1, 0, 1, 50.0)
+    assert calls == [], "flushed before the batch was full"
+
+    s.record(999, 0.1, 0, 1, 50.0)
+    assert calls == [sink_mod.BATCH_SIZE], f"expected one batched insert, got {calls}"
+    assert s.written == sink_mod.BATCH_SIZE
+
+
+def test_sink_survives_an_unreachable_database():
+    """A missing database must not take the pipeline down with it."""
+    from stream import sink as sink_mod
+
+    s = sink_mod.Sink(run_id="test", dsn="postgresql://nobody@127.0.0.1:1/nope").connect()
+    assert not s.enabled
+    s.record(1, 0.5, 0, 1, 100.0)
+    s.close()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

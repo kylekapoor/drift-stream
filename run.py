@@ -126,6 +126,33 @@ def cmd_demo(args):
     print(f"\nresults -> {RESULTS}")
 
 
+def cmd_report(args):
+    """Query what the pipeline persisted. Needs DATABASE_URL."""
+    from stream import sink as sink_mod
+
+    s = sink_mod.Sink(run_id=args.run).connect()
+    if not s.enabled:
+        raise SystemExit(
+            "no database. Set DATABASE_URL, or run under docker compose where "
+            "it is set for you:\n"
+            "  docker compose run --rm pipeline python run.py report --run <group>"
+        )
+    rows = s.report()
+    if not rows:
+        print(f"no rows for run_id={args.run!r}")
+        return
+    print(f"{'version':>7} {'scored':>8} {'fraud':>6} {'mean(fraud)':>12} "
+          f"{'mean(clean)':>12} {'p50 us':>8}")
+    for r in rows:
+        print(f"{r['model_version']:>7} {r['scored']:>8} {r['actual_fraud']:>6} "
+              f"{r['mean_score_fraud'] or 0:>12.3f} {r['mean_score_clean'] or 0:>12.3f} "
+              f"{r['p50_latency_us'] or 0:>8.1f}")
+    print("\nSeparation between the two means is the health signal: a model that "
+          "has stopped\nworking shows them converging, and it needs no threshold "
+          "bookkeeping to see.")
+    s.close()
+
+
 def cmd_drift(args):
     """Show what each drift regime does to the statistics, no Kafka involved."""
     X_ref, y_ref = _reference(seed=args.seed)
@@ -233,6 +260,10 @@ def main():
     d.add_argument("--timeout", type=float, default=180.0)
     d.add_argument("--no-retrain", action="store_true")
     d.set_defaults(func=cmd_demo)
+
+    rep = sub.add_parser("report", help="query persisted predictions (needs Postgres)")
+    rep.add_argument("--run", required=True, help="consumer group used for the run")
+    rep.set_defaults(func=cmd_report)
 
     r = sub.add_parser("drift", help="compare drift statistics across regimes")
     r.set_defaults(func=cmd_drift)

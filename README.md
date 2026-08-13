@@ -8,7 +8,7 @@ This scores transactions live as they stream in, watches for the world changing
 underneath the model, and retrains and swaps itself when it does. It also
 demonstrates one failure mode **no monitoring can catch**.
 
-`Python` · `PyTorch` · `Apache Kafka` · `Docker` · `MLflow` · `scikit-learn` · `FastAPI`
+`Python` · `PyTorch` · `Apache Kafka` · `PostgreSQL` · `Docker` · `MLflow` · `scikit-learn` · `FastAPI`
 
 ---
 
@@ -54,10 +54,26 @@ probabilities calibrated for thresholding.
 
 ```
 Generator ──> Kafka ──> consumer: score inline ──> decision
-                            │
+                            │                          │
+                            │                          └─> Postgres (batched)
                             ├─ every N events: PSI + KS + windowed accuracy
                             └─ trigger ──> retrain (worker thread) ──> MLflow ──> hot swap
 ```
+
+Every decision is persisted to Postgres so the questions that matter afterwards
+are queries, not log grep: how precision moved by model version, which features
+drifted before a retrain fired, what score a disputed transaction got. Writes are
+**batched** — one insert per event would put a network round trip inside a hot
+path measured in microseconds — and the sink is a **no-op without `DATABASE_URL`**,
+so the pipeline runs identically with or without it.
+
+```
+version   scored  fraud  mean(fraud)  mean(clean)   p50 us
+      1     6000    126        0.323        0.040    162.8
+```
+
+Separation between those two means is the health signal: a model that has stopped
+working shows them converging, with no threshold bookkeeping needed.
 
 Two retrain triggers, catching different failures:
 
@@ -86,9 +102,10 @@ All produced believable output while being wrong.
 docker compose run --rm pipeline python run.py train
 docker compose run --rm pipeline python run.py demo --regime covariate_shift
 docker compose --profile api up          # scoring API on :8000
+docker compose run --rm pipeline python run.py report --run <consumer-group>
 ```
 
-Brings up Kafka 4.x (KRaft, no ZooKeeper) and the pipeline together — no JDK, no
+Brings up Kafka 4.x (KRaft, no ZooKeeper), Postgres and the pipeline together — no JDK, no
 manual storage format, no broker left on the host. The broker advertises two
 listeners (`kafka:9092` for containers, `localhost:29092` for the host);
 advertising one silently breaks the other side.
@@ -105,7 +122,7 @@ python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/python run.py drift      # the headline table, no Kafka needed
 ./.venv/bin/python run.py demo --regime concept_drift --window 4000 --events 16000
 ./.venv/bin/python run.py bench      # latency across serving paths
-./.venv/bin/python test_stream.py    # 23 checks
+./.venv/bin/python test_stream.py    # 26 checks
 ```
 
 ## Limits

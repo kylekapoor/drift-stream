@@ -43,14 +43,34 @@ services:
       retries: 12
       start_period: 15s
 
+  postgres:
+    image: postgres:17-alpine
+    container_name: drift-postgres
+    environment:
+      POSTGRES_USER: drift
+      POSTGRES_PASSWORD: drift
+      POSTGRES_DB: drift
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drift -d drift"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
   pipeline:
     build: .
     image: drift-stream:local
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
+      DATABASE_URL: postgresql://drift:drift@postgres:5432/drift
       # A separate store from the host's. MLflow records artifact locations as
       # absolute paths, so a registry written at /app/data/... cannot be read
       # from the host and vice versa. Two files, no collision, both persisted.
@@ -76,3 +96,6 @@ services:
     volumes:
       - ./data:/app/data
     profiles: ["api"]   # only starts with: docker compose --profile api up
+
+volumes:
+  pgdata:

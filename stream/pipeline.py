@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from confluent_kafka import Consumer, KafkaException, Producer
 
-from . import drift, model as model_mod
+from . import drift, model as model_mod, sink as sink_mod
 from .events import FEATURES, Event, Generator
 
 # Overridable so the same code runs against a broker on localhost or one in
@@ -89,6 +89,7 @@ class ScoringRun:
     model_version: int | None = None
     elapsed_s: float = 0.0
     consecutive_perf_alarms: int = 0
+    persisted: int = 0
 
     def percentiles(self, values) -> dict:
         if not values:
@@ -147,10 +148,12 @@ def run_scoring(
     reference_ap: float = 0.0,
     timeout_s: float = 60.0,
     verbose: bool = True,
+    sink=None,
 ) -> ScoringRun:
     """Consume, score inline, monitor drift, retrain and swap when it fires."""
     live_model, version = model_mod.load()
     scorer = Scorer(live_model, version, reference_scores)
+    sink = sink or sink_mod.Sink(run_id=group).connect()
 
     c = consumer(bootstrap, group)
     c.subscribe([topic])
@@ -188,6 +191,10 @@ def run_scoring(
             window_scores.append(score)
             window_labels.append(event.is_fraud)
 
+            # Batched, so the database never enters the scoring hot path.
+            sink.record(event.event_id, score, event.is_fraud, scorer.version,
+                        (t1 - t0) / 1000.0)
+
             if len(window_vectors) >= window:
                 check = _check_window(
                     run, scorer, reference_X, scorer.reference_scores,
@@ -196,12 +203,15 @@ def run_scoring(
                     auto_retrain, reference_ap, verbose,
                 )
                 run.drift_checks.append(check)
+                sink.record_drift(check)
                 window_vectors, window_scores, window_labels = [], [], []
     finally:
         c.close()
+        sink.close()
 
     run.model_version = scorer.version
     run.elapsed_s = (time.time() - first_message_at) if first_message_at else 0.0
+    run.persisted = sink.written
     return run
 
 
