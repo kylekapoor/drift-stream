@@ -28,9 +28,9 @@ In the third row the model has stopped working. Its average precision drops from
 
 No amount of tuning fixes that. If fraudsters change tactics while the
 transactions themselves look the same, identical inputs pass through an
-identical model and produce identical outputs. There is no signal to find. Labels
-expose it, and card-fraud labels show up weeks later with the chargebacks. That
-lag is the expensive part.
+identical model and produce identical outputs. There is no signal to find. Only
+labels expose it, and card-fraud labels arrive weeks later with the chargebacks,
+so you keep approving fraud for the length of that lag.
 
 Row two is friendlier. When the inputs move, PSI hits 1.93 right away and needs
 no labels at all.
