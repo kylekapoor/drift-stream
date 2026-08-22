@@ -279,6 +279,69 @@ def test_sink_survives_an_unreachable_database():
     s.close()
 
 
+def test_a_database_failure_does_not_take_the_pipeline_down():
+    """`connect` already treats a missing database as "run without one".
+
+    `flush` has to agree. A Postgres restart mid-run used to raise out of
+    `record`, up through the consumer loop, and stop a pipeline that is
+    supposed to work fine with no database at all.
+    """
+    from stream import sink as sink_mod
+
+    class Exploding:
+        def cursor(self):
+            raise RuntimeError("server closed the connection unexpectedly")
+
+        def close(self):
+            raise RuntimeError("already gone")
+
+    sink = sink_mod.Sink(run_id="t", dsn="postgres://ignored")
+    sink._conn = Exploding()
+
+    for i in range(3):
+        sink.record(i, 0.5, 0, 1, 10.0)          # must not raise
+    assert sink.flush() == 0
+    assert sink.dropped == 3, f"lost rows went uncounted: {sink.dropped}"
+    assert not sink.enabled, "a failed sink must disable itself, not retry"
+
+    sink.record_drift({"at_event": 1, "verdict": "stable"})   # must not raise
+    sink.close()                                              # must not raise
+
+
+def test_a_disabled_sink_reports_zero_rather_than_pretending():
+    from stream import sink as sink_mod
+
+    sink = sink_mod.Sink(run_id="t", dsn=None).connect()
+    assert not sink.enabled
+    assert sink.flush() == 0
+    assert sink.written == 0 and sink.dropped == 0
+    assert sink.report() == []
+
+
+def test_reference_scores_are_rebaselined_before_the_model_is_swapped():
+    """The consumer thread closes windows while the retrain thread runs.
+
+    One landing between the swap and the re-baseline would score the new
+    model against the old model's reference distribution, which is the
+    retrain-swap-drift-retrain loop this re-baseline exists to prevent.
+    """
+    import inspect
+
+    source = inspect.getsource(pipeline._check_window)
+    swap_at = source.index("scorer.swap(new_model, version)")
+    rebaseline_at = source.index("scorer.reference_scores = new_reference")
+    assert rebaseline_at < swap_at, (
+        "reference_scores must be assigned before scorer.swap, otherwise a "
+        "window closing between them compares the new model to the old baseline"
+    )
+
+
+def test_scorer_swap_replaces_model_and_version_together():
+    scorer = pipeline.Scorer(model="old", version=1, reference_scores=[0.1])
+    scorer.swap("new", 2)
+    assert (scorer.model, scorer.version) == ("new", 2)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

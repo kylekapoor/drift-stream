@@ -279,13 +279,17 @@ def _check_window(run, scorer, reference_X, reference_scores,
                 )
                 version = model_mod.latest_version()
                 new_reference = new_model.predict_proba(reference_X)[:, 1]
-                scorer.swap(new_model, version)
-                # Re-baseline against the model now serving. Without this,
-                # prediction PSI compares the new model's output to the old
-                # model's and reports drift caused entirely by the swap --
-                # retrain, swap, drift, retrain, for ever. It looked like drift
-                # detection working hard; it was a feedback loop.
+                # Re-baseline BEFORE the swap, not after. Without a re-baseline
+                # at all, prediction PSI compares the new model's output to the
+                # old model's and reports drift caused entirely by the swap --
+                # retrain, swap, drift, retrain, for ever. Doing it after the
+                # swap leaves the same bug in a smaller window: the consumer
+                # thread closes windows independently, so one landing between
+                # the two statements scores the new model against the old
+                # baseline. Assigning first means the pair is never mismatched
+                # in that direction.
                 scorer.reference_scores = new_reference
+                scorer.swap(new_model, version)
                 run.swaps.append({
                     "at_event": at_event,
                     "new_version": version,

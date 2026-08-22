@@ -82,6 +82,13 @@ Each of these produced believable output while being wrong.
   mix of both.
 - **Retraining fed itself.** After a swap, prediction PSI still compared against
   the old model's scores, so it measured the swap, retrained, and repeated.
+  Re-baselining fixed it, then left the same bug in a window of two statements:
+  the consumer closes windows on its own thread, so one landing between the swap
+  and the re-baseline scored the new model against the old baseline. The
+  assignment now happens first.
+- **A dead database killed the pipeline.** `connect` treats a missing Postgres
+  as "run without one", but `flush` raised, so a restart mid-run propagated out
+  of the scoring loop. It now drops the batch, counts it, and disables itself.
 
 ## Usage
 
@@ -96,7 +103,7 @@ advertises two listeners, `kafka:9092` for containers and `localhost:29092` for
 the host; advertise one and the other side breaks silently.
 
 Without Docker, `run.py drift` produces the headline table with no Kafka at all,
-and `test_stream.py` runs 26 checks.
+and `test_stream.py` runs 30 checks.
 
 ## Limits
 

@@ -82,6 +82,8 @@ class Sink:
     _conn: object | None = None
     _pending: list = field(default_factory=list)
     written: int = 0
+    # Rows lost to a database failure. Reported, never silently zero.
+    dropped: int = 0
 
     def __post_init__(self):
         self.dsn = self.dsn or os.getenv("DATABASE_URL")
@@ -115,22 +117,42 @@ class Sink:
             self.flush()
 
     def flush(self) -> int:
+        """Write the pending batch. Returns rows written, 0 if the write failed.
+
+        `connect` already treats a missing database as "run without one", and
+        this has to agree: a Postgres restart mid-run used to raise out of
+        `record`, through the consumer loop, and kill a pipeline that is
+        supposed to work fine with no database at all. The batch is dropped and
+        the sink disables itself rather than retrying, because these rows are
+        analysis, not the decision the pipeline just made.
+        """
         if not self._conn or not self._pending:
             return 0
         rows, self._pending = self._pending, []
-        with self._conn.cursor() as cur:
-            cur.executemany(
-                "INSERT INTO predictions "
-                "(run_id, event_id, model_version, score, is_fraud, latency_us) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                rows,
-            )
+        try:
+            with self._conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO predictions "
+                    "(run_id, event_id, model_version, score, is_fraud, latency_us) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    rows,
+                )
+        except Exception:
+            self.dropped += len(rows)
+            self._conn = None
+            return 0
         self.written += len(rows)
         return len(rows)
 
     def record_drift(self, check: dict) -> None:
         if not self._conn:
             return
+        try:
+            self._insert_drift(check)
+        except Exception:
+            self._conn = None
+
+    def _insert_drift(self, check: dict) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO drift_checks (run_id, at_event, verdict, trigger, "
@@ -145,7 +167,10 @@ class Sink:
     def close(self) -> None:
         self.flush()
         if self._conn:
-            self._conn.close()
+            try:
+                self._conn.close()
+            except Exception:
+                pass
             self._conn = None
 
     # --- reporting ---------------------------------------------------------
