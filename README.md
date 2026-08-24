@@ -17,21 +17,18 @@ staleness that monitoring cannot find.
 
 Models go stale in two ways. I could only detect one of them.
 
-| Regime | feature PSI | prediction PSI | avg precision | verdict |
-|---|---|---|---|---|
-| baseline | 0.002 | 0.001 | 0.451 | stable |
-| inputs change | **1.929** | 0.916 | 0.309 | material |
-| rule changes | 0.002 | 0.001 | **0.026** | *stable* |
+![drift signal against model health](docs/drift.png)
 
-In the third row the model has stopped working, average precision down from 0.451
-to 0.026, and every monitor that runs without labels still reports "stable". When
+In the "rule changes" regime the model has stopped working, average precision down
+from 0.451 to 0.026, and every monitor that runs without labels still reports
+"stable". When
 fraudsters change tactics while the transactions look the same, identical inputs
 pass through an identical model and produce identical outputs. There is no signal
 to find. Only labels expose it, and card-fraud labels arrive weeks later with the
 chargebacks, so you keep approving fraud for the length of that lag.
 
-Row two is friendlier: when the inputs move, PSI hits 1.93 straight away and
-needs no labels.
+The middle regime is friendlier: when the inputs move, PSI hits **1.929** against
+a 0.25 material threshold, straight away and with no labels.
 
 ## Latency
 
